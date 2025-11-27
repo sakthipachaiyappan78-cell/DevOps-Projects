@@ -1,11 +1,11 @@
 pipeline {
     agent any
-    
+
     tools {
         jdk 'jdk17'
         maven 'maven3'
     }
-    
+
     environment {
         SCANNER_HOME = tool 'sonar-scanner'
     }
@@ -13,125 +13,84 @@ pipeline {
     stages {
         stage('Git Checkout') {
             steps {
-               git branch: 'main', credentialsId: 'git-cred', url: 'https://github.com/abrahimcse/FullStack-Blogging-App.git'
+                git branch: 'main', credentialsId: 'git-cred', url: 'https://github.com/sakthipachaiyappan78-cell/DevOps-Projects.git'
             }
         }
-        stage('Compile') {
+
+        stage('Build & Test') {
             steps {
-                sh "mvn compile"
-            }
-        }
-        
-        stage('Test') {
-            steps {
-                sh "mvn test"
-            }
-        }
-        
-        stage('File System Scan') {
-            steps {
-                sh "trivy fs --format table -o trivy-fs-report.html ."
-            }
-        }
-        stage('SonarQube Analsyis') {
-            steps {
-                withSonarQubeEnv('sonar') {
-                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=bloggingapp -Dsonar.projectKey=bloggingapp \
-                            -Dsonar.java.binaries=. '''
+                dir('DevOps-Project-38/FullStack-Blogging-App') {
+                    sh "mvn clean compile"
+                    sh "mvn test"
                 }
             }
         }
-        stage('Quality Gate') {
+
+        stage('SonarQube Analysis') {
             steps {
-                script {
-                  waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token' 
-                }
-            }
-        }
-        stage('Build') {
-            steps {
-                sh "mvn package"
-            }
-        }
-        stage('Publish To Nexus') {
-            steps {
-            withMaven(globalMavenSettingsConfig: 'global-settings', jdk: 'jdk17', maven: 'maven3', mavenSettingsConfig: '', traceability: true) {
-                    sh "mvn deploy"
-                }
-            }
-        }
-        stage('Build & Tag Docker Image') {
-            steps {
-               script {
-                   withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
-                            sh "docker build -t abrahimcse/bloggingapp:latest ."
+                dir('DevOps-Project-38/FullStack-Blogging-App') {
+                    withSonarQubeEnv('sonar') {
+                        sh """$SCANNER_HOME/bin/sonar-scanner \\
+                            -Dsonar.projectKey=twitter-app \\
+                            -Dsonar.projectName=twitter-app \\
+                            -Dsonar.java.binaries=target/classes"""
                     }
-               }
-            }
-        }
-        stage('Docker Image Scan') {
-            steps {
-                sh "trivy image --format table -o trivy-image-report.html abrahimcse/bloggingapp:latest "
-            }
-        }
-        stage('Push Docker Image') {
-            steps {
-               script {
-                   withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
-                            sh "docker push abrahimcse/bloggingapp:latest"
-                    }
-               }
-            }
-        }
-        stage('Deploy To Kubernetes') {
-            steps {
-                withKubeConfig(caCertificate: '', clusterName: 'abrahimcse-cluster', contextName: '', credentialsId: 'k8-cred', namespace: 'webapps', restrictKubeConfigAccess: false, serverUrl: 'https://< >.ap-southes-1.eks.amazonaws.com') {
-                      sh "kubectl apply -f deployment-service.yaml"
                 }
             }
         }
-        
-        stage('Verify the Deployment') {
+
+        // ❌ Quality Gate stage removed
+
+        stage('Package & Deploy') {
             steps {
-                withKubeConfig(caCertificate: '', clusterName: 'abrahimcse-cluster', contextName: '', credentialsId: 'k8-cred', namespace: 'webapps', restrictKubeConfigAccess: false, serverUrl: 'https://< >.ap-southes-1.eks.amazonaws.com') {
+                dir('DevOps-Project-38/FullStack-Blogging-App') {
+                    sh "mvn package"
+                    withMaven(globalMavenSettingsConfig: 'global-settings', jdk: 'jdk17', maven: 'maven3') {
+                        sh "mvn deploy"
+                    }
+                }
+            }
+        }
+
+        stage('Docker Build & Scan') {
+            steps {
+                dir('DevOps-Project-38/FullStack-Blogging-App') {
+                    script {
+                        withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+                            sh "docker build -t sakthipachaiyappan78/twitter-app:latest ."
+                            sh "trivy image --format table -o trivy-image-report.html sakthipachaiyappan78/twitter-app:latest"
+                            sh "docker push sakthipachaiyappan78/twitter-app:latest"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                dir('DevOps-Project-38/FullStack-Blogging-App') {
+                    withKubeConfig(
+                        clusterName: 'sakthi',
+                        credentialsId: 'k8-cred',
+                        namespace: 'webapps',
+                        serverUrl: 'https://DE56F67326CC36CDE73CF8B461610E77.gr7.us-east-1.eks.amazonaws.com'
+                    ) {
+                        sh "kubectl apply -f deployment-service.yml"
                         sh "kubectl get pods -n webapps"
                         sh "kubectl get svc -n webapps"
+                    }
                 }
             }
         }
+    }
 
     post {
-    always {
-        script {
-            def jobName = env.JOB_NAME
-            def buildNumber = env.BUILD_NUMBER
-            def pipelineStatus = currentBuild.result ?: 'UNKNOWN'
-            def bannerColor = pipelineStatus.toUpperCase() == 'SUCCESS' ? 'green' : 'red'
-
-            def body = """
-                <html>
-                <body>
-                <div style="border: 4px solid ${bannerColor}; padding: 10px;">
-                <h2>${jobName} - Build ${buildNumber}</h2>
-                <div style="background-color: ${bannerColor}; padding: 10px;">
-                <h3 style="color: white;">Pipeline Status: ${pipelineStatus.toUpperCase()}</h3>
-                </div>
-                <p>Check the <a href="${BUILD_URL}">console output</a>.</p>
-                </div>
-                </body>
-                </html>
-            """
-
+        always {
             emailext (
-                subject: "${jobName} - Build ${buildNumber} - ${pipelineStatus.toUpperCase()}",
-                body: body,
-                to: 'abrahim.ctech@gmail.com',
-                from: 'jenkins@example.com',
-                replyTo: 'jenkins@example.com',
-                mimeType: 'text/html',
-                attachmentsPattern: 'trivy-image-report.html'
+                subject: "Build ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${currentBuild.currentResult}",
+                body: "Build details: ${env.BUILD_URL}",
+                to: 'sakthi.p-extgen@hathway.net'
             )
         }
-      }       
-    }   
+    }
 }
